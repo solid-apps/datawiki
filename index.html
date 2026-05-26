@@ -2,22 +2,149 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>datawiki</title>
 <style>
-  body{margin:0;font:16px/1.6 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#1f2733;background:#f4f6f8}
-  header{background:#2a3140;color:#fff;padding:.8rem 1.2rem;font-weight:800;letter-spacing:.04em}
-  main{max-width:640px;margin:2rem auto;padding:0 1.2rem}
-  h1{margin:.2rem 0}
-  .muted{color:#6b7480}
+  :root{ --slate:#2a3140; --accent:#9a6b4f; --line:#e2e6eb; --mut:#6b7480; }
+  *{box-sizing:border-box}
+  body{margin:0;font:15px/1.6 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#1f2733;background:#f4f6f8}
+  .top{display:flex;align-items:center;gap:.6rem;background:var(--slate);color:#fff;padding:.7rem 1rem}
+  .top b{font-weight:800;letter-spacing:.04em}
+  .top a{margin-left:auto;color:#aeb6c2;text-decoration:none;font-size:.85rem}
+  .wrap{max-width:720px;margin:0 auto;padding:1rem}
+  .bar{display:flex;align-items:center;gap:.6rem;margin-bottom:1rem}
+  .bar h2{margin:0;font-size:1.2rem;flex:1}
+  button{background:var(--accent);color:#fff;border:0;border-radius:8px;padding:.5rem 1rem;font:inherit;font-weight:600;cursor:pointer}
+  button.ghost{background:#fff;color:#1f2733;border:1px solid var(--line);font-weight:500}
+  a.row{display:block;background:#fff;border:1px solid var(--line);border-radius:10px;padding:.6rem .8rem;text-decoration:none;color:#1f2733;margin-bottom:.4rem}
+  a.row:hover{border-color:var(--accent)}
+  input,textarea{width:100%;font:inherit;border:1px solid var(--line);border-radius:8px;padding:.5rem .6rem;margin:.3rem 0}
+  textarea{min-height:38vh;font:14px/1.6 ui-monospace,Menlo,monospace;resize:vertical}
+  .card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:1rem 1.1rem;margin-bottom:1rem}
+  .muted{color:var(--mut)}
+  table{border-collapse:collapse;margin:.3rem 0}
+  th{text-align:left;color:var(--mut);padding:.2rem .8rem .2rem 0;vertical-align:top}
+  .prose h1{font-size:1.5rem}.prose h2{font-size:1.2rem}.prose a{color:var(--accent)}
+  .frow{display:flex;gap:.4rem}.frow input:first-child{flex:0 0 35%}
+  .ref{font:11px ui-monospace,Menlo,monospace;color:var(--mut);word-break:break-all;margin-top:.5rem}
 </style>
 </head>
 <body>
-<header>datawiki</header>
-<main>
-  <h1>datawiki</h1>
-  <p>A linked-data wiki on your Solid pod.</p>
-  <p class="muted">Pages are markdown plus dereferenceable fields, linked by wiki links.</p>
-</main>
+<div class="top"><b>datawiki</b><a href="../../../">root</a></div>
+<div class="wrap"><div id="app"></div></div>
+
+<script src="https://unpkg.com/xlogin"></script>
+<script>
+// datawiki - a tiny linked-data wiki on your Solid pod. Single file, no build,
+// no external markdown lib. Each page is /public/wiki/<slug>.jsonld; fields are
+// RDF properties of #this, so tabulator can =GET("...#this","field").
+"use strict";
+var WIKI = new URL("../../wiki/", location.href);
+var RESERVED = ["@id","@type","@context","schema:name","schema:text"];
+var app = document.getElementById("app");
+
+function authFetch(u,o){ return ((window.xlogin && window.xlogin.authFetch) || fetch)(u,o); }
+function me(){ return window.xlogin && window.xlogin.id; }
+function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c];}); }
+function slug(s){ return String(s||"").toLowerCase().trim().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,""); }
+function deslug(s){ return s.replace(/-/g," ").replace(/\b\w/g,function(c){return c.toUpperCase();}); }
+
+function getLd(u){ return authFetch(u,{headers:{Accept:"application/ld+json"}}).then(function(r){ return r.ok ? r.json().catch(function(){return null;}) : null; }); }
+function putLd(u,d){
+  var body = JSON.stringify(d,null,2);
+  function go(){ return authFetch(u,{method:"PUT",headers:{"Content-Type":"application/ld+json"},body:body}); }
+  return go().then(function(r){
+    if(!r.ok && (r.status===404||r.status===409)){ return authFetch(WIKI,{method:"PUT",headers:{"Content-Type":"text/turtle"},body:""}).catch(function(){}).then(go); }
+    return r;
+  }).then(function(r){ return r.ok; });
+}
+
+// Safe markdown: escape everything first, then add a small, fixed set of tags.
+// Links restricted to http(s) and internal #/ wiki links only - no raw HTML.
+function md(s){
+  s = esc(s);
+  s = s.replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, function(_,p,l){ return '<a href="#/'+slug(p.trim())+'">'+(l||p)+"</a>"; });
+  s = s.replace(/^### (.*)$/gm,"<h3>$1</h3>").replace(/^## (.*)$/gm,"<h2>$1</h2>").replace(/^# (.*)$/gm,"<h1>$1</h1>");
+  s = s.replace(/\*\*([^*]+)\*\*/g,"<b>$1</b>");
+  s = s.replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g,'<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+  return s.split(/\n{2,}/).map(function(b){ return /^<h[1-3]>/.test(b) ? b : "<p>"+b.replace(/\n/g,"<br>")+"</p>"; }).join("");
+}
+
+function listPages(){
+  return getLd(WIKI).then(function(d){
+    if(!d) return [];
+    var c = d["ldp:contains"] || d["http://www.w3.org/ns/ldp#contains"] || [];
+    if(!Array.isArray(c)) c = [c];
+    return c.map(function(x){ return typeof x==="string"?x:(x&&x["@id"]); })
+            .filter(function(u){ return u && /\.jsonld$/.test(u); })
+            .map(function(u){ return decodeURIComponent(u.split("/").pop().replace(".jsonld","")); });
+  });
+}
+function pageUrl(s){ return new URL(s+".jsonld", WIKI).href; }
+function loadPage(s){
+  return getLd(pageUrl(s)).then(function(d){
+    if(!d) return { slug:s, exists:false, title:deslug(s), body:"", fields:{} };
+    var g = d["@graph"] ? (Array.isArray(d["@graph"])?d["@graph"]:[d["@graph"]]) : [d];
+    var n = g.filter(function(x){ return (x["@id"]||"").indexOf("#this")>=0; })[0] || g[0] || {};
+    var fields = {};
+    for(var k in n){ if(RESERVED.indexOf(k)>=0 || k.charAt(0)==="@") continue; var v=n[k]; fields[k]=(v&&typeof v==="object")?(v["@value"]||v["@id"]):v; }
+    return { slug:s, exists:true, title:n["schema:name"]||deslug(s), body:n["schema:text"]||"", fields:fields };
+  });
+}
+function savePage(p){
+  var doc = { "@context":{"@vocab":"urn:solid:wiki#",schema:"https://schema.org/"}, "@id":"#this", "@type":"WikiPage", "schema:name":p.title, "schema:text":p.body };
+  for(var k in p.fields){ if(RESERVED.indexOf(k)<0 && p.fields[k]!==""){ var num=Number(p.fields[k]); doc[k]=(!isNaN(num)&&p.fields[k]!=="")?num:p.fields[k]; } }
+  return putLd(pageUrl(p.slug), doc);
+}
+
+function render(){
+  if(!me()){ app.innerHTML = '<div class="card"><h2>datawiki</h2><p>A wiki where every page is linked data: prose plus fields, joined by [[wiki links]]. Pages live in <code>/public/wiki/</code> on your pod.</p><p class="muted">Sign in (login pill, bottom-right) to start.</p></div>'; return; }
+  var h = location.hash.replace(/^#\/?/,"");
+  if(h) showPage(h); else showIndex();
+}
+function showIndex(){
+  app.innerHTML = '<div class="bar"><h2>Wiki</h2><button id="new">+ New page</button></div><div id="list" class="muted">Loading...</div>';
+  document.getElementById("new").onclick = function(){ var n=prompt("Page title:"); if(n) location.hash = "#/"+slug(n); };
+  listPages().then(function(slugs){
+    var el = document.getElementById("list"); el.className = "";
+    el.innerHTML = slugs.length ? slugs.sort().map(function(s){ return '<a class="row" href="#/'+esc(s)+'">'+esc(deslug(s))+"</a>"; }).join("") : '<div class="card muted">No pages yet. Create one.</div>';
+  }).catch(function(e){ document.getElementById("list").innerHTML = '<div class="card muted">Could not list: '+esc(e.message)+"</div>"; });
+}
+function showPage(s){ app.innerHTML = '<div class="muted">Loading...</div>'; loadPage(s).then(viewPage); }
+function viewPage(p){
+  if(!p.exists){
+    app.innerHTML = '<div class="bar"><a class="row" style="margin:0" href="#/">Back</a></div><div class="card muted">"'+esc(p.title)+'" does not exist yet. <button id="create">Create it</button></div>';
+    document.getElementById("create").onclick = function(){ p.exists=true; p.body="# "+p.title+"\n\n"; editPage(p); };
+    return;
+  }
+  var fk = Object.keys(p.fields);
+  var info = fk.length ? '<div class="card"><table>'+fk.map(function(k){ return "<tr><th>"+esc(k)+"</th><td>"+esc(p.fields[k])+"</td></tr>"; }).join("")+'</table><div class="ref">=GET("'+esc(new URL(pageUrl(p.slug),location.href).href)+'#this","'+esc(fk[0])+'")</div></div>' : "";
+  app.innerHTML = '<div class="bar"><a class="row" style="margin:0;padding:.4rem .7rem" href="#/">Back</a><h2>'+esc(p.title)+'</h2><button id="edit">Edit</button></div>'+info+'<div class="prose">'+md(p.body)+"</div>";
+  document.getElementById("edit").onclick = function(){ editPage(p); };
+}
+function editPage(p){
+  var fields = Object.keys(p.fields).map(function(k){ return [k,p.fields[k]]; }); fields.push(["",""]);
+  app.innerHTML = '<div class="bar"><h2>Edit</h2><button class="ghost" id="cancel">Cancel</button><button id="save">Save</button></div>'+
+    '<input id="t" placeholder="Title" value="'+esc(p.title)+'">'+
+    '<div class="card"><div class="muted">Fields (facts)</div><div id="fields">'+
+    fields.map(function(f){ return '<div class="frow"><input class="fk" placeholder="field" value="'+esc(f[0])+'"><input class="fv" placeholder="value" value="'+esc(f[1])+'"></div>'; }).join("")+
+    '</div><button class="ghost" id="addf">+ field</button></div>'+
+    '<textarea id="b" placeholder="Markdown. Use [[Page Name]] to link.">'+esc(p.body)+"</textarea>";
+  document.getElementById("cancel").onclick = function(){ location.hash = "#/"+p.slug; render(); };
+  document.getElementById("addf").onclick = function(){ document.getElementById("fields").insertAdjacentHTML("beforeend",'<div class="frow"><input class="fk" placeholder="field"><input class="fv" placeholder="value"></div>'); };
+  document.getElementById("save").onclick = function(){
+    var fields = {};
+    document.querySelectorAll("#fields .frow").forEach(function(r){ var k=r.querySelector(".fk").value.trim(), v=r.querySelector(".fv").value.trim(); if(k&&v) fields[k]=v; });
+    var np = { slug:p.slug, exists:true, title:document.getElementById("t").value.trim()||deslug(p.slug), body:document.getElementById("b").value, fields:fields };
+    var btn=document.getElementById("save"); btn.disabled=true; btn.textContent="Saving...";
+    savePage(np).then(function(ok){ if(ok){ viewPage(np); } else { btn.disabled=false; btn.textContent="Save"; alert("Save failed - are you signed in?"); } });
+  };
+}
+
+window.addEventListener("hashchange", render);
+document.addEventListener("xlogin", render);
+document.addEventListener("xlogout", render);
+render();
+</script>
 </body>
 </html>
